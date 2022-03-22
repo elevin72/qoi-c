@@ -5,4 +5,4 @@ default:
 
 
 tests:
-	gcc test/*.c -lcriterion && ./a.out
+	gcc -g test/*.c src/encoder.c src/common.c src/constants.c -lcriterion && ./a.out

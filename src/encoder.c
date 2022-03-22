@@ -10,52 +10,17 @@
 
 #include "qoi.h"
 
-const char MAGIC[4] = {'q', 'o', 'i', 'f'};
 
-// const Pixel R, G, B, A, EMPTY;
-const Pixel R = {0xFF, 0x00, 0x00, 0x00};
-const Pixel G = {0x00, 0xFF, 0x00, 0x00};
-const Pixel B = {0x00, 0x00, 0xFF, 0x00};
-const Pixel A = {0x00, 0x00, 0x00, 0xFF};
-const Pixel EMPTY = {0x00, 0x00, 0x00, 0x00};
-
-const uint8_t QOI_OP_RUN_TAG = 0xC0;  /*11xxxxxx*/
-const uint8_t QOI_OP_LUMA_TAG = 0x80; /*10xxxxxx*/
-const uint8_t QOI_OP_DIFF_TAG = 0x40; /*01xxxxxx*/
-const uint8_t QOI_OP_INDEX_TAG = 0;   /*00xxxxxx*/
-const uint8_t QOI_OP_RGB_TAG = 0xFE;  /*11111110*/
-const uint8_t QOI_OP_RGBA_TAG = 0xFF; /*11111111*/
-
-// recieve as a signed int since then it is easier to check in a range like
-// -2..1
-static inline int8_t InDiffRange(int8_t num) { return num >= -2 && num <= 1; }
-static inline int8_t InLumaRange_G(int8_t num) {
-    return num >= -32 && num <= 31;
-}
-static inline int8_t InLumaRange_BR(int8_t num) {
-    return num >= -8 && num <= 7;
-}
-static inline uint8_t HashIndex(Pixel pixel) {
-    return ((pixel.rgba.r * 3) + (pixel.rgba.g * 5) + (pixel.rgba.b * 7) +
-            (pixel.rgba.a * 11)) %
-           64;
-}
-
-// BIAS means bump forward/backward by that amount
-
-int Encode(QoiHeader *qoiHeader, uint8_t *data, size_t numBytes, char *file) {
-    Pixel a;
-    FILE *output = fopen(file, "w+");
-    if (output == NULL) {
-        fprintf(stderr, "fopen() failed\n");
-    }
+uint8_t *Encode(QoiHeader *qoiHeader, uint8_t *data, size_t numBytes, uint32_t *outputSize) {
+    uint8_t *buf = malloc(HEADER_LENGTH + numBytes + FOOTER_LENGTH);
+    uint32_t size = 0;
 
     // write header
-    fwrite(MAGIC, 1, 4, output);
-    fwrite(&qoiHeader->height, 4, 1, output);
-    fwrite(&qoiHeader->width, 4, 1, output);
-    fwrite(&qoiHeader->channels, 1, 1, output);
-    fwrite(&qoiHeader->colorspace, 1, 1, output);
+    QOI_Write32(buf, MAGIC, &size);
+    QOI_Write32(buf, (uint8_t *)&qoiHeader->height, &size);
+    QOI_Write32(buf, (uint8_t *)&qoiHeader->width, &size);
+    QOI_Write8(buf, &qoiHeader->channels, &size);
+    QOI_Write8(buf, &qoiHeader->colorspace, &size);
 
     Pixel previouslySeen[64];
     memset(previouslySeen, 0, sizeof(previouslySeen));
@@ -65,12 +30,11 @@ int Encode(QoiHeader *qoiHeader, uint8_t *data, size_t numBytes, char *file) {
     uint8_t alphaMask = qoiHeader->channels == 3 ? 0xFF : 0;
 
     for (int i = 0; i < numBytes; i += qoiHeader->channels) {
-        // cast address of byte to address of pixel and apply alpha mask
         pixel.rgba.r = data[i];
         pixel.rgba.g = data[i + 1];
         pixel.rgba.b = data[i + 2];
         pixel.rgba.a = data[i + 3] | alphaMask;
-        uint8_t index = HashIndex(pixel);
+        uint32_t index = QOI_HashIndex(pixel);
 
         if (previousPixel.raw == pixel.raw) {
             uint8_t runLength = 0;
@@ -83,33 +47,35 @@ int Encode(QoiHeader *qoiHeader, uint8_t *data, size_t numBytes, char *file) {
             // apply bias
             runLength -= 1;
             uint8_t qoi_op_run = QOI_OP_RUN_TAG | runLength;
-            fwrite(&qoi_op_run, 1, 1, output);
+            QOI_Write8(buf, &qoi_op_run, &size);
 
         } else if (previouslySeen[index].raw == pixel.raw) {
             // write QOI_OP_INDEX to stream
             uint8_t qoi_op_index = QOI_OP_INDEX_TAG | index;
-            fwrite(&qoi_op_index, 1, 1, output);
+            QOI_Write8(buf, &qoi_op_index, &size);
 
         } else if (pixel.rgba.a == previousPixel.rgba.a) {
             uint8_t dr = pixel.rgba.r - previousPixel.rgba.r;
             uint8_t dg = pixel.rgba.g - previousPixel.rgba.g;
             uint8_t db = pixel.rgba.b - previousPixel.rgba.b;
             uint8_t dr_dg = dr - dg;
-            uint8_t db_dg = dr - dg;
+            uint8_t db_dg = db - dg;
+            // dr_dg + dg + prevpixel.r = pixel.r
+            // pixel.r = prevpixel.r + pixel.g - prevpixel.g + dr_dg
 
-            if (InDiffRange(dr) && InDiffRange(dg) && InDiffRange(db)) {
+            if (QOI_InDiffRange(dr) && QOI_InDiffRange(dg) &&
+                QOI_InDiffRange(db)) {
                 // write QOI_OP_DIFF to stream
                 // apply bias and shift
                 dr = (dr + 2) << 4;
                 dg = (dg + 2) << 2;
                 db += 2;
                 uint8_t qoi_op_diff = QOI_OP_DIFF_TAG | dr | dg | db;
-                fwrite(&qoi_op_diff, 1, 1, output);
+                QOI_Write8(buf, &qoi_op_diff, &size);
 
-            } else if (InLumaRange_G(dg) && InLumaRange_BR(dr_dg) &&
-                       InLumaRange_BR(db_dg)) {
+            } else if (QOI_InLumaRange(dg) && QOI_InLumaRange_BR(dr_dg) &&
+                       QOI_InLumaRange_BR(db_dg)) {
                 // write QOI_OP_LUMA
-
                 // apply bias
                 dg += 32;
                 dr_dg = (dr_dg + 8) << 4;
@@ -117,22 +83,27 @@ int Encode(QoiHeader *qoiHeader, uint8_t *data, size_t numBytes, char *file) {
                 uint8_t byte0 = QOI_OP_LUMA_TAG | dg;
                 uint8_t byte1 = dr_dg | db_dg;
                 uint8_t qoi_op_luma[2] = {byte0, byte1};
-                fwrite(&qoi_op_luma, 2, 1, output);
+                QOI_Write16(buf, qoi_op_luma, &size);
 
             } else {
                 // write QOI_OP_RGB to stream
-                uint8_t qoi_op_rgb[4] = {QOI_OP_RGB_TAG, pixel.rgba.r, pixel.rgba.g,
-                                         pixel.rgba.b};
-                fwrite(&qoi_op_rgb, 4, 1, output);
+                uint8_t qoi_op_rgb[4] = {QOI_OP_RGB_TAG, pixel.rgba.r,
+                                         pixel.rgba.g, pixel.rgba.b};
+                QOI_Write32(buf, qoi_op_rgb, &size);
             }
         } else {
             // write QOI_OP to stream
-            uint8_t qoi_op_rgb[5] = {QOI_OP_RGB_TAG, pixel.rgba.r, pixel.rgba.g, pixel.rgba.b,
-                                     pixel.rgba.a};
-            fwrite(&qoi_op_rgb, 5, 1, output);
+            uint8_t qoi_op_rgba[5] = {QOI_OP_RGB_TAG, pixel.rgba.r,
+                                      pixel.rgba.g, pixel.rgba.b, pixel.rgba.a};
+            QOI_Write8(buf, qoi_op_rgba, &size);
+            QOI_Write32(buf, qoi_op_rgba, &size);
         }
         previousPixel = previouslySeen[index] = pixel;
     }
-    fclose(output);
-    return 0;
+
+    // write footer
+    QOI_Write32(buf, FOOTER, &size);
+    QOI_Write32(buf, FOOTER + 4, &size);
+    *outputSize = size;
+    return buf;
 }
