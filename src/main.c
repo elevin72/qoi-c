@@ -1,23 +1,75 @@
+
+#include <stddef.h>
 #include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
+
+#include "spng.h"
 #include "qoi.h"
 
-/* uint8_t *MakeHeader(uint32_t height, uint32_t width, uint8_t channels) {
-    uint8_t *h = (uint8_t *)&height;
-    uint8_t *w = (uint8_t *)&width;
-    uint8_t header[14] = {'q',  'o',  'i',  'f',  h[0], h[1],     h[2],
-                          h[3], w[0], w[1], w[2], w[3], channels, 0};
-    uint8_t *ptr = (uint8_t *)malloc(14);
-    memcpy(ptr, header, 14);
-    return ptr;
-} */
+static uint8_t *ptr;
 
-int CompareMinusHeader(uint8_t *actual, uint8_t *expect, int n) {
-    return !memcmp(actual, expect + 14, n);
+
+int main(int argc, char *argv[]) {
+    size_t size;
+    spng_ctx *ctx = spng_ctx_new(0);
+
+    FILE *file = fopen(argv[1], "rb");
+    // FILE *file = fopen("libspng-0.7.2/tests/images/basi4a08.png", "rb");
+    spng_set_png_file(ctx, file);
+    // spng_set_png_buffer(ctx, buf, 1024);
+    struct spng_ihdr ihdr;
+    spng_get_ihdr(ctx, &ihdr);
+    spng_decoded_image_size(ctx, SPNG_FMT_RGBA8, &size);
+    uint8_t *image = malloc(size);
+    spng_decode_image(ctx, image, size, SPNG_FMT_RGBA8, SPNG_DECODE_TRNS);
+    size_t width = ihdr.width;
+    size_t height = ihdr.height;
+    ptr = image;
+
+    QoiHeader q = {
+        .height = height,
+        .width = width,
+        .channels = 4,
+        .colorspace = 0,
+    };
+
+    size_t c_size;
+    uint8_t *out = Encode(&q, image, size, &c_size);
+    QoiHeader q_new;
+    uint8_t *orig = Decode(out, &q_new);
+    int m = memcmp(image, orig, size);
+    //printf("%s", m);
+    if (m == 0) {
+        printf("raw size: %zu    encoded size: %zu\n",size, c_size);
+        printf("pass\n");
+    } else {
+        printf("fail\n");
+    }
 }
 
-int main(int argc, char* argv[]) {
+/* int FullCircle(void *data, size_t width, size_t height, size_t channels) {
+    QoiHeader q = {
+        .height = height,
+        .width = width,
+        .channels = channels,
+        .colorspace = 0,
+    };
+
+    size_t c_size;
+    size_t size = width * height * channels;
+    uint8_t *out = Encode(&q, data, size, &c_size);
+    QoiHeader q_new;
+    uint8_t *orig = Decode(out, &q_new);
+    if (!memcmp(data, orig, size)) {
+        printf("pass");
+    } else {
+        printf("fail");
+    }
+
+} */
+
+/* int main(int argc, char* argv[]) {
     QoiHeader q = {
         .height = 1,
         .width = 3,
@@ -37,4 +89,4 @@ int main(int argc, char* argv[]) {
         printf("pass");
     }
 
-}
+} */

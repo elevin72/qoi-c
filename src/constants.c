@@ -1,7 +1,7 @@
 #include "qoi.h"
 
-const uint32_t HEADER_LENGTH = 14;
-const uint32_t FOOTER_LENGTH = 8;
+// const uint32_t HEADER_LENGTH = 14;
+// const uint32_t FOOTER_LENGTH = 8;
 
 const uint8_t MAGIC[] = {'q', 'o', 'i', 'f'};
 const uint8_t FOOTER[] = {0, 0, 0, 0, 0, 0, 0, 1};
